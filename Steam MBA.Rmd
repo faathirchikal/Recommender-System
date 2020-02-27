@@ -1,0 +1,173 @@
+---
+title: "Market Basket Analysis on Steam Data"
+author: "Faathir Chikal Asyuraa"
+date: "10/30/2019"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+
+```{r, error=FALSE}
+#Required Packages
+library(arules)
+library(arulesViz)
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(ggplot2)
+library(plyr)
+library(dplyr)
+library(plotly)
+library(RColorBrewer)
+```
+
+We'll analyze game transaction Data on Steam game store on 2017
+
+```{r}
+steam<-read.csv('steam.csv')
+head(steam)
+```
+
+zero values on duration means that the user haven't played that game yet after purchasing it
+
+let's do a little bit of EDA before we start the Market Basket Analysis
+```{r}
+str(steam)
+```
+
+It looks like user_id are recognized as int, let's change that, and take a look at the data
+```{r}
+steam$user_id<-as.factor(steam$user_id)
+print(paste0('number of user: ',length(unique(steam$user_id))))
+print(paste0('number of games: ',length(unique(steam$game))))
+```
+
+Top 10 Biggest Player Base
+```{r}
+steam %>% group_by(game) %>% dplyr::summarise(average_hours_spend = as.integer(mean(duration)),player=n()) %>% arrange(desc(player))
+```
+
+
+Top 10 Longest Played Games
+```{r}
+steam %>% group_by(game) %>% dplyr::summarise(average_hours_spend = as.integer(mean(duration)),player=n()) %>% arrange(desc(average_hours_spend))
+```
+
+Top 10 Longest Played Games with playerbase > 10 
+```{r}
+steam %>% group_by(game) %>% dplyr::summarise(average_hours_spend = as.integer(mean(duration)),player=n()) %>% filter(player>10) %>% arrange(desc(average_hours_spend)) 
+```
+
+Number of Games Owned
+```{r}
+ggplotly(steam %>% group_by(user_id) %>% dplyr::summarise(games_owned=n()) %>% ggplot(aes(x=games_owned))+geom_histogram(bins=100)+ggtitle('Distribution of games owned'))
+```
+
+Time Spent on Steam
+```{r}
+ggplotly(steam %>% group_by(user_id) %>% dplyr::summarise(time_spent=sum(duration)) %>% ggplot(aes(x=time_spent))+geom_histogram(bins=100)+ggtitle('Distribution of Time Spent on Steam (Hours)'))
+```
+
+Now, we are done with the EDA
+Note that for MBA, we must shape the data so the rows are unique user, and there are a columns of list of transaction (in this case, games purchased)
+
+```{r}
+transactionData <- ddply(steam,c('user_id'), #Getting list of games per user
+                       function(df1)paste(df1$game,
+                       collapse = ","))
+head(transactionData)
+```
+
+
+We no longer needed user_id column, and we need to rename the V1 column to games column
+```{r}
+transactionData$user_id <- NULL
+colnames(transactionData) <- c('games')
+```
+
+Let's convert it to a transaction object
+```{r,error=FALSE,message=FALSE,warning=FALSE}
+write.csv(transactionData,"market_basket_transactions.csv", quote = FALSE, row.names = FALSE)
+tr <- read.transactions('market_basket_transactions.csv', format = 'basket', sep=',')
+```
+
+
+Now, we'll use Apriori algorithm to determine the rules, providing minimum support and confidence, while keeping a value of maxlen
+
+
+```{r}
+association.rules <- apriori(tr, parameter = list(supp=0.01, conf=0.5, maxlen=10))
+```
+
+```{r}
+inspect(sort(association.rules,decreasing = TRUE,
+    by = "support")[1:10])
+```
+
+```{r}
+plotly_arules(association.rules)
+```
+```{r}
+plot(association.rules, method = "graph",  engine = "htmlwidget")
+```
+
+An alternative way to setup the rules, we can filter the data, so that we'll recommend a game only if the user has played it more than 2 hours 
+
+```{r}
+steam_more_than_2_hours <- steam %>% filter(duration>2)
+dim(steam_more_than_2_hours)
+```
+
+
+
+We're only left with ~40000 data, 
+```{r,error=FALSE,message=FALSE,warning=FALSE}
+shorter_transactionData <- ddply(steam_more_than_2_hours,c('user_id'), #Getting list of games per user
+                       function(df1)paste(df1$game,
+                       collapse = ","))
+
+
+shorter_transactionData$user_id <- NULL
+colnames(shorter_transactionData) <- c('games')
+
+
+write.csv(shorter_transactionData,"shorter_market_basket_transactions.csv", quote = FALSE, row.names = FALSE)
+shorter_tr <- read.transactions('shorter_market_basket_transactions.csv', format = 'basket', sep=',')
+summary(shorter_tr)
+
+```
+
+
+```{r}
+shorter_association.rules <- apriori(shorter_tr, parameter = list(supp=0.005, conf=0.5, maxlen=10))
+```
+```{r}
+inspect(shorter_association.rules[1:10])
+```
+
+
+Sorted by confidence
+```{r}
+inspect(sort(shorter_association.rules, decreasing = TRUE,
+    by = "confidence")[1:10])
+```
+
+
+Sorted by support
+```{r}
+inspect(sort(shorter_association.rules, decreasing = TRUE,
+    by = "support")[1:10])
+```
+
+```{r}
+plot(shorter_association.rules, method = "graph",  engine = "htmlwidget")
+```
+
+
+What should you recommend if your friend plays Dota 2?
+
+```{r}
+Dota2.association.rules <- apriori(shorter_tr, parameter = list(supp=0.001, conf=0.05),appearance = list(lhs="Dota 2",default="rhs"))
+plot(Dota2.association.rules, method = "graph",  engine = "htmlwidget")
+```
